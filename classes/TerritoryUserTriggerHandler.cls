@@ -2,7 +2,6 @@ public with sharing class TerritoryUserTriggerHandler {
 
     public static void shareToUserById(Id idUser) {
         List<TerritoryUser__c> territoryUserList = createTerritoryUserListById(idUser);
-
         // List of the territories for the current user.
         List<Id> currentUserTerritoryList = new List<Id>();
 
@@ -33,9 +32,11 @@ public with sharing class TerritoryUserTriggerHandler {
         List<Territory__c> allSubTerritories = new List<Territory__c>();
         List <Territory__c> subTerritoriesList = [SELECT Id, Name FROM Territory__c WHERE Parent_Territory__r.Id =: territoryId];
         allSubTerritories.addAll(subTerritoriesList);
-        for(Territory__c subTerritory : subTerritoriesList) {
-            List <Territory__c> subTerritories = createSubTerritoryList(subTerritory.Id);
-            allSubTerritories.addAll(subTerritories);
+        if (subTerritoriesList.size() != 0) {
+            for(Territory__c subTerritory : subTerritoriesList) {
+                List <Territory__c> subTerritories = createSubTerritoryList(subTerritory.Id);
+                allSubTerritories.addAll(subTerritories);
+            }
         }
 
         return allSubTerritories;
@@ -47,7 +48,6 @@ public with sharing class TerritoryUserTriggerHandler {
         List<ContactShare> contactShareList = new List<ContactShare>();
 
         if (currentUserTerritoryList.size() != 0) {
-            System.debug(currentUserTerritoryList);
             for (Id territoryId : currentUserTerritoryList) {
                 // Add Account sharing based on territory and sub territory.
                 List <Account> accountList = getAccountListBasedOnTerritoryId(territoryId);
@@ -93,13 +93,10 @@ public with sharing class TerritoryUserTriggerHandler {
 
     public static void closeAccessForUser(Id idUser) {
         List<ContactShare> contactShares = getContactShareListForDelete(idUser);
-        Database.delete (contactShares, false);
+        Database.delete(contactShares, false);
 
         List <AccountShare> accountShares = getAccountShareForDelete (idUser);
-        Database.delete (accountShares, false);
-
-        List <Territory__Share> territoryShares = getTerritoryShareListForDel (idUser);
-        Database.delete (territoryShares, false);
+        Database.delete(accountShares, false);
     }
 
     private static List <ContactShare> getContactShareListForDelete (Id idUser) {
@@ -108,9 +105,5 @@ public with sharing class TerritoryUserTriggerHandler {
 
     private static List<AccountShare> getAccountShareForDelete (Id idUser){
         return [SELECT Id, AccountId, UserOrGroupId FROM  AccountShare WHERE UserOrGroupId = :idUser];
-    }
-
-    private static List<Territory__Share> getTerritoryShareListForDel (Id idUser) {
-        return [SELECT Id FROM Territory__Share WHERE UserOrGroupId = :idUser];
     }
 }
