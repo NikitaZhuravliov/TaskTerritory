@@ -1,25 +1,19 @@
-trigger TerritoryUserTrigger on TerritoryUser__c (after insert, after update, after delete) {
+trigger TerritoryUserTrigger on TerritoryUser__c (after insert, after update, after delete, after undelete) {
+    TerritoryUserTriggerHandler handler = new TerritoryUserTriggerHandler();
+
     if(Trigger.isInsert) {
-        for(TerritoryUser__c territoryUser : Trigger.new) {
-            TerritoryUserTriggerHandler.shareToUserById(territoryUser.User__c);
-        }
+        handler.onInsert(Trigger.new);
     }
 
     if(Trigger.isUpdate) {
-        for(TerritoryUser__c territoryUser : Trigger.new) {
-            // Close all sharing.
-            TerritoryUserTriggerHandler.closeAccessForUser(territoryUser.User__c);
-            // Add sharing.
-            TerritoryUserTriggerHandler.shareToUserById(territoryUser.User__c);
-        }
+        handler.onUpdate(Trigger.new, Trigger.old);
     }
 
     if(Trigger.isDelete) {
-        for(TerritoryUser__c territoryUser : Trigger.old) {
-            // Close all sharing.
-            TerritoryUserTriggerHandler.closeAccessForUser(territoryUser.User__c);
-            // Add sharing.
-            TerritoryUserTriggerHandler.shareToUserById(territoryUser.User__c);
-        }
+        handler.onDelete(Trigger.old);
+    }
+
+    if(Trigger.isUndelete) {
+        handler.onUndelete(Trigger.new);
     }
 }

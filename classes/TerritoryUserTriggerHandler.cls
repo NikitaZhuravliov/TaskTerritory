@@ -1,41 +1,106 @@
 public with sharing class TerritoryUserTriggerHandler {
 
-    public static void shareToUserById(Id idUser) {
-        List<TerritoryUser__c> territoryUserList = createTerritoryUserListById(idUser);
-        // List of the territories for the current user.
-        List<Id> currentUserTerritoryList = new List<Id>();
-
-        for(TerritoryUser__c territoryUser : territoryUserList) {
-            currentUserTerritoryList.add(territoryUser.Territory__r.Id);
-
-            // Get sub territories for the territory.
-            List<Territory__c> subTerritoriesList = createSubTerritoryList(territoryUser.Territory__r.Id);
-            if(subTerritoriesList.size() != 0) {
-                // Add each sub territory to the currentUserTerritoryList.
-                for(Territory__c subTerritory : subTerritoriesList) {
-                    currentUserTerritoryList.add(subTerritory.Id);
-                }
-            }
-
-            // Add Sharing.
-            addSharing(currentUserTerritoryList, idUser);
+    public void onInsert(TerritoryUser__c[] newTerritoryUser) {
+        List<SObject> objectsToShare = new List<SObject>();
+        Map<Id, Id> territoryToUser = new Map<Id, Id>();
+        for(TerritoryUser__c territoryUser : newTerritoryUser) {
+            territoryToUser.put(territoryUser.Territory__c, territoryUser.User__c);
+            objectsToShare.addAll(shareTerritoriesToUser(territoryToUser));
         }
+
+        Database.upsert(objectsToShare, false);
     }
 
-    // Get TerritoryUser list by User ID.
-    private static List<TerritoryUser__c> createTerritoryUserListById(Id idUser) {
-        return [SELECT Name, Territory__r.Id, User__r.Id FROM TerritoryUser__c WHERE User__r.Id =: idUser];
+    public void onUpdate(TerritoryUser__c[] newTerritoryUser, TerritoryUser__c[] oldTerritoryUser) {
+        // Old record.
+        List<SObject> objectsToDeleteSharingOld = new List<SObject>();
+        List<SObject> objectsToShareOld = new List<SObject>();
+        Map<Id, Id> territoryToUserOld = new Map<Id, Id>();
+        for(TerritoryUser__c territoryUser : oldTerritoryUser) {
+            // Close all sharing.
+            objectsToDeleteSharingOld.addAll(closeSharingTerritoriesToUser(territoryUser.User__c));
+            // Add sharing except deleted.
+            territoryToUserOld.putAll(getAllTerritoryUser(territoryUser.User__c));
+            territoryToUserOld.remove(territoryUser.Territory__c);
+            objectsToShareOld.addAll(shareTerritoriesToUser(territoryToUserOld));
+        }
+
+        Database.delete(objectsToDeleteSharingOld, false);
+        Database.upsert(objectsToShareOld, false);
+
+        // New record.
+        List<SObject> objectsToDeleteSharingNew = new List<SObject>();
+        List<SObject> objectsToShareNew = new List<SObject>();
+        Map<Id, Id> territoryToUserNew = new Map<Id, Id>();
+        for(TerritoryUser__c territoryUser : newTerritoryUser) {
+            territoryToUserNew.put(territoryUser.Territory__c, territoryUser.User__c);
+            // Close all sharing.
+            objectsToDeleteSharingNew.addAll(closeSharingTerritoriesToUser(territoryUser.User__c));
+            // Add sharing.
+            territoryToUserNew.putAll(getAllTerritoryUser(territoryUser.User__c));
+            objectsToShareNew.addAll(shareTerritoriesToUser(territoryToUserNew));
+        }
+
+        Database.delete(objectsToDeleteSharingNew, false);
+        Database.upsert(objectsToShareNew, false);
     }
 
-    // Get all sub territories for the territory.
-    private static List <Territory__c> createSubTerritoryList(Id territoryId) {
-        List<Territory__c> allSubTerritories = new List<Territory__c>();
-        List <Territory__c> subTerritoriesList = [SELECT Id, Name FROM Territory__c WHERE Parent_Territory__r.Id =: territoryId];
-        allSubTerritories.addAll(subTerritoriesList);
-        if (subTerritoriesList.size() != 0) {
-            for(Territory__c subTerritory : subTerritoriesList) {
-                List <Territory__c> subTerritories = createSubTerritoryList(subTerritory.Id);
-                allSubTerritories.addAll(subTerritories);
+    public void onDelete(TerritoryUser__c[] oldTerritoryUser) {
+        List<SObject> objectsToDeleteSharing = new List<SObject>();
+        List<SObject> objectsToShare = new List<SObject>();
+        Map<Id, Id> territoryToUser = new Map<Id, Id>();
+        for(TerritoryUser__c territoryUser : oldTerritoryUser) {
+            // Close all sharing.
+            objectsToDeleteSharing.addAll(closeSharingTerritoriesToUser(territoryUser.User__c));
+            // Add sharing except deleted.
+            territoryToUser.putAll(getAllTerritoryUser(territoryUser.User__c));
+            territoryToUser.remove(territoryUser.Territory__c);
+            objectsToShare.addAll(shareTerritoriesToUser(territoryToUser));
+        }
+
+        Database.delete(objectsToDeleteSharing, false);
+        Database.upsert(objectsToShare, false);
+    }
+
+    public void onUndelete(TerritoryUser__c[] newTerritoryUser) {
+        List<SObject> objectsToShare = new List<SObject>();
+        Map<Id, Id> territoryToUser = new Map<Id, Id>();
+        for(TerritoryUser__c territoryUser : newTerritoryUser) {
+            territoryToUser.put(territoryUser.Territory__c, territoryUser.User__c);
+            objectsToShare.addAll(shareTerritoriesToUser(territoryToUser));
+        }
+
+        Database.upsert(objectsToShare, false);
+    }
+
+    // Share territories to user.
+    public List<SObject> shareTerritoriesToUser(Map<Id, Id> territoryToUser) {
+        List<SObject> objectsToShare = new List<SObject>();
+
+        for(Id territoryId : territoryToUser.keySet()) {
+            Map<Id, Territory__c> subTerritories = getSubTerritories(territoryId);
+            subTerritories.putAll(new Map<Id, Territory__c>([SELECT Id FROM Territory__c WHERE Id = :territoryId]));
+            Id userId = territoryToUser.get(territoryId);
+            objectsToShare.addAll(addSharing(subTerritories, userId));
+        }
+
+        return objectsToShare;
+    }
+
+    // Share territories to user.
+    public Map<Id, Territory__c> getSubTerritories(Id territoryId) {
+        Map<Id, Territory__c> allSubTerritories = new Map<Id, Territory__c>();
+        Map<Id, Territory__c> subTerritories = new Map<Id, Territory__c>([SELECT Id
+            FROM Territory__c
+            WHERE Parent_Territory__c = :territoryId
+        ]);
+
+        allSubTerritories.putAll(subTerritories);
+
+        if (!subTerritories.isEmpty()) {
+            for(Territory__c subTerritory : subTerritories.values()) {
+                Map<Id, Territory__c> subSubTerritories = getSubTerritories(subTerritory.Id);
+                allSubTerritories.putAll(subSubTerritories);
             }
         }
 
@@ -43,33 +108,34 @@ public with sharing class TerritoryUserTriggerHandler {
     }
 
     // Add Sharing.
-    private static void addSharing(List<Id> currentUserTerritoryList, Id idUser) {
-        List<AccountShare> accountShareList = new List<AccountShare>();
-        List<ContactShare> contactShareList = new List<ContactShare>();
+    private List<SObject> addSharing(Map<Id, Territory__c> subTerritories, Id userId) {
+        List<SObject> objectsToShare = new List<SObject>();
+        List<SObject> accountsToShare = new List<SObject>();
+        List<SObject> contactsToShare = new List<SObject>();
 
-        if (currentUserTerritoryList.size() != 0) {
-            for (Id territoryId : currentUserTerritoryList) {
+        if(!subTerritories.isEmpty()) {
+            for (Id territoryId : subTerritories.keySet()) {
                 // Add Account sharing based on territory and sub territory.
-                List <Account> accountList = getAccountListBasedOnTerritoryId(territoryId);
-                if (accountList.size() != 0) {
-                    for (Account account : accountList) {
+                Map<Id, Account> accounts = getAccountsBasedOnTerritoryId(territoryId);
+                if (!accounts.isEmpty()) {
+                    for (Id accountId : accounts.keySet()) {
                         // Share Account.
                         AccountShare accountShare = new AccountShare();
-                        accountShare.AccountId = account.Id;
-                        accountShare.UserOrGroupId = idUser;
+                        accountShare.AccountId = accountId;
+                        accountShare.UserOrGroupId = userId;
                         accountShare.OpportunityAccessLevel = 'none';
                         accountShare.AccountAccessLevel = 'Edit';
-                        accountShareList.add(accountShare);
+                        accountsToShare.add(accountShare);
 
                         // Share Contacts.
-                        List <Reference__c> contactList = getContactListBasedOnAccountId(account.Id);
-                        if (contactList.size() != 0) {
-                            for (Reference__c contact : contactList) {
+                        Map<Id, Reference__c> contacts = getContactsBasedOnAccountId(accountId);
+                        if (!contacts.isEmpty()) {
+                            for (Reference__c contact : contacts.values()) {
                                 ContactShare contactShare = new ContactShare();
                                 contactShare.ContactId = contact.Contacts__r.Id;
-                                contactShare.UserOrGroupId = idUser;
+                                contactShare.UserOrGroupId = userId;
                                 contactShare.ContactAccessLevel = 'Edit';
-                                contactShareList.add(contactShare);
+                                contactsToShare.add(contactShare);
                             }
                         }
                     }
@@ -77,33 +143,56 @@ public with sharing class TerritoryUserTriggerHandler {
             }
         }
 
-        Database.upsert(accountShareList, false);
-        Database.upsert(contactShareList, false);
+        objectsToShare.addAll(accountsToShare);
+        objectsToShare.addAll(contactsToShare);
+        return objectsToShare;
     }
 
-    // Get list of Accounts based on territory id.
-    private static List<Account> getAccountListBasedOnTerritoryId(Id territoryId) {
-        return [SELECT Id FROM Account WHERE Territory__r.Id = :territoryId];
+    // Get Accounts map based on Territory id.
+    private Map<Id, Account> getAccountsBasedOnTerritoryId(Id territoryId) {
+        return new Map<Id, Account>([SELECT Id FROM Account WHERE Territory__r.Id = :territoryId]);
     }
 
-    // Get list of Contacts based on Account Id.
-    private static List<Reference__c> getContactListBasedOnAccountId(Id accountId) {
-        return [SELECT Contacts__r.Id FROM Reference__c WHERE Account__r.Id = :accountId];
+    // Get Contacts map based on Account Id.
+    private Map<Id, Reference__c> getContactsBasedOnAccountId(Id accountId) {
+        return new Map<Id, Reference__c>([SELECT Contacts__r.Id FROM Reference__c WHERE Account__r.Id = :accountId]);
     }
 
-    public static void closeAccessForUser(Id idUser) {
-        List<ContactShare> contactShares = getContactShareListForDelete(idUser);
-        Database.delete(contactShares, false);
+    // Close sharing by user Id on specified territories.
+    public List<SObject> closeSharingTerritoriesToUser(Id userId) {
+        List<SObject> objectsToCloseSharing = new List<SObject>();
 
-        List <AccountShare> accountShares = getAccountShareForDelete (idUser);
-        Database.delete(accountShares, false);
+        // Close Account Sharing.
+        Map<Id, AccountShare> accountShares = getAccountsShareForDelete(userId);
+        objectsToCloseSharing.addAll(accountShares.values());
+
+        // Close Contacts Sharing.
+        Map<Id, ContactShare> contactShares = getContactsShareForDelete(userId);
+        objectsToCloseSharing.addAll(contactShares.values());
+
+        return objectsToCloseSharing;
     }
 
-    private static List <ContactShare> getContactShareListForDelete (Id idUser) {
-        return [SELECT Id, ContactId, UserOrGroupId FROM ContactShare WHERE  UserOrGroupId = :idUser];
+    // Get all territory to user.
+    public Map<Id, Id> getAllTerritoryUser(Id userId) {
+        Map<Id, Id> territoryToUser = new Map<Id, Id>();
+        Map<Id, TerritoryUser__c> territoriesUser = new Map<Id, TerritoryUser__c>([SELECT Territory__c, User__c FROM TerritoryUser__c WHERE User__c = :userId]);
+        System.debug(territoriesUser);
+        for(TerritoryUser__c territoryUser : territoriesUser.values()) {
+            System.debug(territoryUser);
+            territoryToUser.put(territoryUser.Territory__c, territoryUser.User__c);
+        }
+
+        return territoryToUser;
     }
 
-    private static List<AccountShare> getAccountShareForDelete (Id idUser){
-        return [SELECT Id, AccountId, UserOrGroupId FROM  AccountShare WHERE UserOrGroupId = :idUser];
+    // Get ContactShare map.
+    private Map<Id, ContactShare> getContactsShareForDelete (Id userId) {
+        return new Map<Id, ContactShare>([SELECT Id, ContactId, UserOrGroupId FROM ContactShare WHERE UserOrGroupId = :userId]);
+    }
+
+    // Get AccountShare map.
+    private Map<Id, AccountShare> getAccountsShareForDelete (Id userId){
+        return new Map<Id, AccountShare>([SELECT Id, AccountId, UserOrGroupId FROM AccountShare WHERE UserOrGroupId = :userId]);
     }
 }
